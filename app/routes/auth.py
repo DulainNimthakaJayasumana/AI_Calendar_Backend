@@ -5,6 +5,9 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from app.config import settings
 
+# Simulated in-memory storage for tokens (use a database in production)
+user_tokens = {}
+
 router = APIRouter()
 
 @router.get("/auth/login")
@@ -50,8 +53,33 @@ def callback(request: Request):
     flow.fetch_token(code=code)
     credentials = flow.credentials
 
-    return {
+    # Store credentials (in-memory; use a database for real applications)
+    user_tokens["user"] = {
         "access_token": credentials.token,
         "refresh_token": credentials.refresh_token,
-        "expiry": credentials.expiry.isoformat() if credentials.expiry else None
+        "expiry": credentials.expiry.isoformat() if credentials.expiry else None,
     }
+    return {"message": "Authorization successful. Tokens stored."}
+
+def insert_event_into_google_calendar(event_data: dict):
+    # Retrieve tokens
+    token_info = user_tokens.get("user")
+    if not token_info:
+        raise HTTPException(status_code=403, detail="User not authenticated")
+
+    creds = Credentials(
+        token=token_info.get("access_token"),
+        refresh_token=token_info.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=settings.GOOGLE_CLIENT_ID,
+        client_secret=settings.GOOGLE_CLIENT_SECRET
+    )
+    service = build("calendar", "v3", credentials=creds)
+    event_body = {
+        "summary": event_data["title"],
+        "description": event_data.get("description", ""),
+        "start": {"dateTime": event_data["start_time"], "timeZone": "UTC"},
+        "end": {"dateTime": event_data["end_time"], "timeZone": "UTC"},
+    }
+    created_event = service.events().insert(calendarId="primary", body=event_body).execute()
+    return created_event
